@@ -3104,6 +3104,13 @@ private static class PaletteHueView extends android.view.View {
             }
         });
         cardNote(ctx, card3, "文字/光标颜色：修改后重新进入输入框生效");
+
+        // v492：输入框背景玻璃化
+        LinearLayout card4 = configCard(ctx, content);
+        cardSwitchRow(ctx, card4, "玻璃化背景", DsConfig.inputGlassOn(ctx), new Runnable() {
+            public void run() { DsConfig.setInputGlassOn(ctx, !DsConfig.inputGlassOn(ctx)); }
+        });
+        cardNote(ctx, card4, "输入框背景改为半透明玻璃质 + 顶部高光（需重进聊天页生效）");
     }
 
     /** 构建「灵动岛设置」配置页内容 */
@@ -3227,6 +3234,10 @@ private static class PaletteHueView extends android.view.View {
             public void run() { DsConfig.setUnifyBubble(ctx, !DsConfig.unifyBubble(ctx)); }
         });
         cardNote(ctx, card0, "AI 与用户气泡强制使用同一种颜色样式");
+        cardSwitchRow(ctx, card0, "AI 气泡玻璃化", DsConfig.aiGlassOn(ctx), new Runnable() {
+            public void run() { DsConfig.setAiGlassOn(ctx, !DsConfig.aiGlassOn(ctx)); }
+        });
+        cardNote(ctx, card0, "AI 气泡改为半透明液态玻璃质感（更透、能透出背景）");
 
         // ═══ 第二段：气泡效果（互斥单选）═══
         // 渐变 / 液态玻璃 —— 互斥，开一个自动关另一个（只更新 Switch 状态，不重建页面）
