@@ -324,9 +324,32 @@ public class DsSettingsPage {
         });
         contentBox.addView(card4);
 
+        // ── 关于 / 开源 ──
+        contentBox.addView(sectionTitle("关于"));
+        LinearLayout cardAbout = card();
+        item(cardAbout, "开源仓库", "github.com/wf200866/ds-module", new Runnable() {
+            public void run() {
+                try {
+                    android.content.Intent it = new android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://github.com/wf200866/ds-module"));
+                    act.startActivity(it);
+                } catch (Throwable t) {
+                    DsFloat.toast(act, "无法打开浏览器，仓库地址：\ngithub.com/wf200866/ds-module");
+                }
+            }
+        });
+        divider(cardAbout);
+        item(cardAbout, "开源许可", "GNU GPL-3.0（基于 Deekseep）", new Runnable() {
+            public void run() {
+                DsFloat.toast(act, "本模块以 GPL-3.0 开源\n参考自 github.com/lllucccian/Deekseep");
+            }
+        });
+        contentBox.addView(cardAbout);
+
         // 关于
         TextView about = new TextView(act);
-        about.setText("ds美化 · DeepSeek 美化模块\n版本 v360 · 2026-09-18");
+        about.setText("ds模块 · DeepSeek 美化模块\n版本 v490 · 2026-09-19\nGPL-3.0 · github.com/wf200866/ds-module");
         about.setTextSize(12);
         about.setTextColor(cSub());
         about.setGravity(Gravity.CENTER);
