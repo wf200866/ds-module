@@ -2124,6 +2124,7 @@ XposedBridge.log("[ds美化] v309 hookTextWave EX " + t);
     private static volatile int sCanvasProbeLogged = 0;
     private static volatile int sBubbleBoxLogged = 0;
     private static volatile int sShapeDiagLogged = 0;
+    private static volatile int sGradLogged = 0;
     private static final ThreadLocal<Object> sLastDrawNode = new ThreadLocal<>();
 
     private static void hookBubbleCanvas(final ClassLoader cl) {
@@ -2201,6 +2202,63 @@ XposedBridge.log("[ds美化] v309 hookTextWave EX " + t);
                                 if (++cnt >= 5) break;
                             }
                             if (!isShapeStack) return;  // 非形状栈跳过
+                            // v502 诊断：打印 tb.g 所有候选（找 AI 气泡圆角矩形真实参数）
+                            if (sShapeDiagLogged < 60 && w >= 100f && h >= 50f) {
+                                sShapeDiagLogged++;
+                                XposedBridge.log("[ds美化][v502diag] tb.g color=" + (color == -1 ? "?" : String.format("#%08x", color))
+                                        + " wh=(" + fmt(w) + "x" + fmt(h) + ") round=(" + fmt(rx) + "," + fmt(ry) + ")");
+                            }
+                            // ★ v501：AI 气泡走 drawRoundRect（圆角矩形）—— 在这里也应用渐变！
+                            {
+                                android.content.Context gCtx = appCtx();
+                                if (gCtx != null && DsConfig.gradientBubbleOn(gCtx)) {
+                                    // AI 气泡：不透明彩色 + 尺寸合适（宽100-600 高50-500）
+                                    boolean sizeOk = w >= 100f && w <= 600f && h >= 50f && h <= 500f;
+                                    boolean isOpaqueColor = false;
+                                    if (color != -1) {
+                                        int aa = (color >>> 24) & 0xFF;
+                                        int rr = (color >> 16) & 0xFF, gg = (color >> 8) & 0xFF, bb = color & 0xFF;
+                                        boolean gray = Math.abs(rr - gg) < 12 && Math.abs(gg - bb) < 12;
+                                        boolean nearWB = (rr > 245 && gg > 245 && bb > 245) || (rr < 12 && gg < 12 && bb < 12);
+                                        isOpaqueColor = aa >= 0xF0 && !gray && !nearWB;
+                                    }
+                                    if (isOpaqueColor && sizeOk) {
+                                        try {
+                                            Object rc = fRealCanvasG.get(param.thisObject);
+                                            if (rc instanceof android.graphics.Canvas) {
+                                                android.graphics.Canvas cv = (android.graphics.Canvas) rc;
+                                                int[][] pals = {
+                                                        {0xFF4D6BFE, 0xFF8EA9FF}, {0xFF8B5CF6, 0xFFC4B5FD},
+                                                        {0xFF10B981, 0xFF6EE7B7}, {0xFFFF6B6B, 0xFF4D6BFE},
+                                                        {0xFFEC4899, 0xFF8B5CF6}, {0xFFF59E0B, 0xFFFBBF24}
+                                                };
+                                                int gPal = DsConfig.gradientPalette(gCtx);
+                                                int cc1 = 0xFF4D6BFE, cc2 = 0xFF8EA9FF;
+                                                if (gPal == 6) {
+                                                    cc1 = DsConfig.gradientCustom1(gCtx);
+                                                    cc2 = DsConfig.gradientCustom2(gCtx);
+                                                } else {
+                                                    int[] pal = pals[gPal % pals.length];
+                                                    cc1 = pal[0]; cc2 = pal[1];
+                                                }
+                                                android.graphics.Shader sh = new android.graphics.LinearGradient(
+                                                        l, t, r, b, cc1, cc2, android.graphics.Shader.TileMode.CLAMP);
+                                                android.graphics.Paint gp = new android.graphics.Paint();
+                                                gp.setShader(sh);
+                                                // 用圆角矩形画（跟随原圆角 rx,ry）
+                                                cv.drawRoundRect(l, t, r, b, rx, ry, gp);
+                                                param.setResult(null);
+                                                if (sCanvasProbeLogged < 400) {
+                                                    sCanvasProbeLogged++;
+                                                    XposedBridge.log("[ds美化][v501] AI气泡渐变(圆角) rect=(" + fmt(l) + "," + fmt(t)
+                                                            + "," + fmt(r) + "," + fmt(b) + ") round=(" + fmt(rx) + "," + fmt(ry) + ")");
+                                                }
+                                                return;
+                                            }
+                                        } catch (Throwable ignored) {}
+                                    }
+                                }
+                            }
                             // ★ 只打诊断日志，不再画色框（避免污染搜索框等 UI）
                             if (sCanvasProbeLogged < 200) {
                                 sCanvasProbeLogged++;
@@ -2210,6 +2268,93 @@ XposedBridge.log("[ds美化] v309 hookTextWave EX " + t);
                     }
                 });
                 XposedBridge.log("[ds美化][C探针] tb.g(drawRoundRect) hooked (只日志)");
+            }
+            // ★ v503：tb.e(hf,ze) = drawPath —— AI 气泡(se0圆角背景)可能走这里！
+            java.lang.reflect.Method drawPathM = null;
+            for (java.lang.reflect.Method m : tbCls.getDeclaredMethods()) {
+                if (!"e".equals(m.getName())) continue;
+                Class<?>[] pts = m.getParameterTypes();
+                if (pts.length == 2 && pts[0].getName().equals("hf") && pts[1].getName().equals("ze")) {
+                    drawPathM = m; break;
+                }
+            }
+            if (drawPathM != null) {
+                deoptimizeMethod(drawPathM);
+                final java.lang.reflect.Field fPathA = null; // hf.a 在回调里取
+                XposedBridge.hookMethod(drawPathM, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        try {
+                            Object hf = param.args[0];
+                            Object ze = param.args[1];
+                            if (hf == null || ze == null) return;
+                            // 取真实 Path
+                            java.lang.reflect.Field fa = hf.getClass().getField("a");
+                            Object po = fa.get(hf);
+                            if (!(po instanceof android.graphics.Path)) return;
+                            android.graphics.Path path = (android.graphics.Path) po;
+                            android.graphics.RectF rf = new android.graphics.RectF();
+                            path.computeBounds(rf, true);
+                            float pw = rf.width(), ph = rf.height();
+                            // 取颜色
+                            int pcolor = -1;
+                            try {
+                                Object paint = fGPaint.invoke(null, ze);
+                                if (paint instanceof android.graphics.Paint) pcolor = ((android.graphics.Paint) paint).getColor();
+                            } catch (Throwable ignored) {}
+                            // v503 诊断：打印 drawPath 候选
+                            if (sShapeDiagLogged < 60 && pw >= 100f && ph >= 50f) {
+                                sShapeDiagLogged++;
+                                XposedBridge.log("[ds美化][v503diag] tb.e path color=" + (pcolor == -1 ? "?" : String.format("#%08x", pcolor))
+                                        + " wh=(" + fmt(pw) + "x" + fmt(ph) + ")");
+                            }
+                            // AI 气泡：不透明彩色 + 尺寸合适 → 画渐变
+                            android.content.Context gCtx = appCtx();
+                            if (gCtx != null && DsConfig.gradientBubbleOn(gCtx)) {
+                                boolean sizeOk = pw >= 100f && pw <= 600f && ph >= 50f && ph <= 500f;
+                                boolean isOpaque = false;
+                                if (pcolor != -1) {
+                                    int aa = (pcolor >>> 24) & 0xFF;
+                                    int rr = (pcolor >> 16) & 0xFF, gg = (pcolor >> 8) & 0xFF, bb = pcolor & 0xFF;
+                                    boolean gray = Math.abs(rr - gg) < 12 && Math.abs(gg - bb) < 12;
+                                    boolean nearWB = (rr > 245 && gg > 245 && bb > 245) || (rr < 12 && gg < 12 && bb < 12);
+                                    isOpaque = aa >= 0xF0 && !gray && !nearWB;
+                                }
+                                if (isOpaque && sizeOk) {
+                                    try {
+                                        Object rc = tbCls.getField("a").get(param.thisObject);
+                                        if (rc instanceof android.graphics.Canvas) {
+                                            android.graphics.Canvas cv = (android.graphics.Canvas) rc;
+                                            int[][] pals = {
+                                                    {0xFF4D6BFE, 0xFF8EA9FF}, {0xFF8B5CF6, 0xFFC4B5FD},
+                                                    {0xFF10B981, 0xFF6EE7B7}, {0xFFFF6B6B, 0xFF4D6BFE},
+                                                    {0xFFEC4899, 0xFF8B5CF6}, {0xFFF59E0B, 0xFFFBBF24}
+                                            };
+                                            int gPal = DsConfig.gradientPalette(gCtx);
+                                            int cc1, cc2;
+                                            if (gPal == 6) { cc1 = DsConfig.gradientCustom1(gCtx); cc2 = DsConfig.gradientCustom2(gCtx); }
+                                            else { int[] pal = pals[gPal % pals.length]; cc1 = pal[0]; cc2 = pal[1]; }
+                                            android.graphics.Shader sh = new android.graphics.LinearGradient(
+                                                    rf.left, rf.top, rf.right, rf.bottom, cc1, cc2, android.graphics.Shader.TileMode.CLAMP);
+                                            android.graphics.Paint gp = new android.graphics.Paint();
+                                            gp.setShader(sh);
+                                            gp.setAntiAlias(true);
+                                            cv.drawPath(path, gp);
+                                            param.setResult(null);
+                                            if (sCanvasProbeLogged < 400) {
+                                                sCanvasProbeLogged++;
+                                                XposedBridge.log("[ds美化][v503] AI气泡渐变(Path) color=" + String.format("#%08x", pcolor)
+                                                        + " wh=(" + fmt(pw) + "x" + fmt(ph) + ")");
+                                            }
+                                            return;
+                                        }
+                                    } catch (Throwable ignored) {}
+                                }
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                });
+                XposedBridge.log("[ds美化][v503] tb.e(drawPath) hooked");
             }
             // tb.k(FFFFLze)V = drawRect（兜底）
             java.lang.reflect.Method drawRect = null;
@@ -2262,16 +2407,75 @@ XposedBridge.log("[ds美化] v309 hookTextWave EX " + t);
                                 if (++cnt >= 5) break;
                             }
                             if (!isShapeStack) return;  // 非形状栈跳过
+                            // ═══ v492：输入框玻璃化（识别宽>700 的浅色输入框条）═══
+                            {
+                                android.content.Context inCtx = appCtx();
+                                if (inCtx != null && DsConfig.inputGlassOn(inCtx)) {
+                                    // v493 诊断：打印所有宽>400 的形状绘制，找输入框真实特征
+                                    if (sShapeDiagLogged < 40 && w > 400f) {
+                                        sShapeDiagLogged++;
+                                        XposedBridge.log("[ds美化][v493diag] wide color=" + (color == -1 ? "?" : String.format("#%08x", color))
+                                                + " wh=(" + fmt(w) + "x" + fmt(h) + ") y=(" + fmt(kt) + "-" + fmt(kb) + ")");
+                                    }
+                                    // v494：输入框真实特征 = 透明色(#00000000) + 宽 700-900 + 高 100-160（实测 808x126）
+                                    boolean isInputBar = (color == 0x00000000) && w >= 700f && w <= 900f && h >= 100f && h <= 160f;
+                                    if (isInputBar) {
+                                        try {
+                                            Object rc = fRealCanvasK.get(param.thisObject);
+                                            if (rc instanceof android.graphics.Canvas) {
+                                                android.graphics.Canvas cv = (android.graphics.Canvas) rc;
+                                                float h2 = kb - kt;
+                                                // 玻璃底（半透明色，配置）
+                                                android.graphics.Paint bgp = new android.graphics.Paint();
+                                                bgp.setColor(DsConfig.inputGlassColor(inCtx));
+                                                cv.drawRect(kl, kt, kr, kb, bgp);
+                                                // 顶部高光
+                                                android.graphics.Shader hl = new android.graphics.LinearGradient(
+                                                        kl, kt, kl, kt + h2 * 0.5f,
+                                                        0x66FFFFFF, 0x00FFFFFF, android.graphics.Shader.TileMode.CLAMP);
+                                                android.graphics.Paint hlp = new android.graphics.Paint();
+                                                hlp.setShader(hl);
+                                                cv.drawRect(kl, kt, kr, kt + h2 * 0.5f, hlp);
+                                                // 边缘描边
+                                                android.graphics.Paint ep = new android.graphics.Paint();
+                                                ep.setStyle(android.graphics.Paint.Style.STROKE);
+                                                ep.setStrokeWidth(1.5f);
+                                                ep.setColor(0x55FFFFFF);
+                                                cv.drawRect(kl, kt, kr, kb, ep);
+                                                param.setResult(null);
+                                                return;  // 已处理，跳过气泡逻辑
+                                            }
+                                        } catch (Throwable ignored) {}
+                                    }
+                                }
+                            }
                             // ★ v490 气泡识别（尺寸约束修复）：
                             //   实测：整屏容器 #d6f2ec 953x999/953x1715（假气泡）、输入框 #edf3fe 808x126
-                            //   真气泡：用户 273x88；AI 气泡应在类似量级
-                            //   约束：宽 100-600（排除 808 输入框 + 953 整屏）、高 50-500
-                            //   v490fix：AI 气泡去掉 markOn 依赖（回后台纯重绘时标记失效导致渐变丢失）
+                            //   真气泡：用户 273x88；AI 气泡 228x77
+                            //   v496fix：AI 气泡改用"彩色 + 尺寸"识别（颜色随配置/重绘变化，不锁定单一色）
                             boolean sizeOk = w >= 100f && w <= 600f && h >= 50f && h <= 500f;
+                            // v499：AI 气泡识别（修正误伤）——用【不透明】+【彩色】+【尺寸】
+                            //   误伤根因：#4700bfa5（半透明青绿图标 138x128）被当气泡
+                            //   真气泡 #ffd6f2ec 是【不透明】(alpha=0xFF)；图标是【半透明】(alpha<0xFF)
+                            boolean isOpaqueColor = false;
+                            if (color != -1) {
+                                int aa = (color >>> 24) & 0xFF;
+                                int rr = (color >> 16) & 0xFF, gg = (color >> 8) & 0xFF, bb = color & 0xFF;
+                                boolean gray = Math.abs(rr - gg) < 12 && Math.abs(gg - bb) < 12;
+                                boolean nearWhiteOrBlack = (rr > 245 && gg > 245 && bb > 245) || (rr < 12 && gg < 12 && bb < 12);
+                                // 不透明（alpha>=0xF0）+ 彩色 → 气泡
+                                isOpaqueColor = aa >= 0xF0 && !gray && !nearWhiteOrBlack;
+                            }
                             boolean isUserBubble = (color == 0xFFEDF3FE) && sizeOk;
-                            boolean isAiBubble = (color == sAiBubbleColor) && sizeOk;
+                            boolean isAiBubble = isOpaqueColor && sizeOk;
                             if (!isUserBubble && !isAiBubble) return;
                             kHit = true;
+                            // v498 诊断：记录气泡识别命中（看是否持续执行）
+                            if (sBubbleBoxLogged < 80) {
+                                sBubbleBoxLogged++;
+                                XposedBridge.log("[ds美化][v498diag] BUBBLE-HIT color=" + String.format("#%08x", color)
+                                        + " wh=(" + fmt(w) + "x" + fmt(h) + ") ai=" + isAiBubble + " user=" + isUserBubble);
+                            }
 
                             // ═══ v446 方案C：液态玻璃气泡（纯Canvas，不走blur，防崩）═══
                             // glassBubbleOn=true 时：半透明白底 + 顶部高光 + 边缘描边 = 玻璃质感
@@ -2379,6 +2583,12 @@ XposedBridge.log("[ds美化] v309 hookTextWave EX " + t);
                                         android.graphics.Paint gp = new android.graphics.Paint();
                                         gp.setShader(sh);
                                         cv.drawRect(kl, kt, kr, kb, gp);
+                                        // v504 诊断：单独计数（不受 400 限流影响）
+                                        if (sGradLogged < 100) {
+                                            sGradLogged++;
+                                            XposedBridge.log("[ds美化][v504diag] GRAD-DRAWN rect=(" + fmt(kl) + "," + fmt(kt)
+                                                    + "," + fmt(kr) + "," + fmt(kb) + ") c1=" + String.format("#%08x", c1));
+                                        }
                                         param.setResult(null);
                                     }
                                 } catch (Throwable te) {
@@ -2622,6 +2832,18 @@ XposedBridge.log("[ds美化] v309 hookTextWave EX " + t);
                                     }
                                 }
                             }
+                            // v505：AI 气泡玻璃化（半透明液态玻璃感）——降低 alpha
+                            try {
+                                android.content.Context ggCtx = appCtx();
+                                if (ggCtx != null && DsConfig.aiGlassOn(ggCtx)) {
+                                    int pct = DsConfig.aiGlassAlpha(ggCtx);
+                                    if (pct < 40) pct = 40;
+                                    if (pct > 100) pct = 100;
+                                    int alpha = (int) (pct * 255L / 100L);
+                                    long rgb = aiColor & 0x00FFFFFFL;
+                                    aiColor = ((long) alpha << 24) | rgb;
+                                }
+                            } catch (Throwable ignored) {}
                             Object brush = fZcO.get(null);
                             // v481：记录注入的 AI 气泡色，供 tb.k 精准识别
                             sAiBubbleColor = (int) (aiColor & 0xFFFFFFFFL);
