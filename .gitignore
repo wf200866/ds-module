@@ -1,0 +1,37 @@
+# ── 构建产物 ──
+/build
+/app/build
+*.apk
+*.ap_
+*.dex
+*.class
+
+# ── Gradle ──
+.gradle/
+gradle-app.setting
+.gradletasknamecache
+
+# ── 本地配置（含本机 SDK 路径，禁止提交）──
+local.properties
+
+# ── IDE ──
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.DS_Store
+
+# ── 签名与密钥（绝不提交）──
+*.jks
+*.keystore
+keystore.properties
+
+# ── 日志与临时文件 ──
+*.log
+*.tmp
+*.bak
+captures/
+
+# ── 自用模块（不参与开源）──
+/embed/
