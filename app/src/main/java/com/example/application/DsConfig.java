@@ -410,6 +410,34 @@ public final class DsConfig {
     public static void setUnifyBubble(Context c, boolean v) {
         p(c).edit().putBoolean("unify_bubble", v).commit();
     }
+    // v492：输入框玻璃化开关（半透明玻璃 + 高光）
+    public static boolean inputGlassOn(Context c) {
+        return p(c).getBoolean("input_glass_on", false);
+    }
+    public static void setInputGlassOn(Context c, boolean v) {
+        p(c).edit().putBoolean("input_glass_on", v).commit();
+    }
+    // v492：输入框玻璃色（默认浅白玻璃 0x66F5F8FF）
+    public static int inputGlassColor(Context c) {
+        return p(c).getInt("input_glass_color", 0x66F5F8FF);
+    }
+    public static void setInputGlassColor(Context c, int v) {
+        p(c).edit().putInt("input_glass_color", v).commit();
+    }
+    // v505：AI 气泡玻璃化（半透明液态玻璃感）——把 AI 气泡色 alpha 降低
+    public static boolean aiGlassOn(Context c) {
+        return p(c).getBoolean("ai_glass_on", false);
+    }
+    public static void setAiGlassOn(Context c, boolean v) {
+        p(c).edit().putBoolean("ai_glass_on", v).commit();
+    }
+    // v505：AI 气泡玻璃透明度（40-100，百分比）
+    public static int aiGlassAlpha(Context c) {
+        return p(c).getInt("ai_glass_alpha", 70);
+    }
+    public static void setAiGlassAlpha(Context c, int v) {
+        p(c).edit().putInt("ai_glass_alpha", v).commit();
+    }
     // v462：气泡描边开关（默认关）
     public static boolean bubbleStrokeOn(Context c) {
         if (!DsLicense.isActivated(c)) return false;
